@@ -1,0 +1,42 @@
+kind: template
+name: "TypeScript REST API"
+description: "Express + TypeScript. Strict tsconfig, Zod validation, Pino logging, multi-stage Dockerfile, GitHub Actions CI. Deploys to Lambda or ECS Fargate."
+tech_stack: typescript
+category: backend
+
+deploy:
+  type: terraform
+  path: ./infrastructure
+  pipeline: github-actions
+  entry: deploy.yml
+  branch: main
+
+parameters:
+  - name: service_name
+    label: Service Name
+    type: string
+    required: true
+  - name: environment
+    label: Environment
+    type: select
+    required: true
+    options: [{ value: dev, label: Development }, { value: test, label: Test }, { value: prod, label: Production }]
+    default: dev
+  - name: compute
+    label: Compute Type
+    type: select
+    options: [{ value: lambda, label: "Lambda (serverless)" }, { value: ecs-fargate, label: "ECS Fargate" }]
+    default: lambda
+  - name: node_version
+    label: Node.js Version
+    type: select
+    options: ["20", "22"]
+    default: "22"
+
+requires:
+  - kind: secret
+    name: AWS_ACCESS_KEY_ID
+    description: AWS credentials in GitHub secrets
+  - kind: secret
+    name: AWS_SECRET_ACCESS_KEY
+    description: AWS credentials in GitHub secrets
