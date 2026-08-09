@@ -1,12 +1,12 @@
 kind: template
 name: "TypeScript REST API"
-description: "Express + TypeScript. Strict tsconfig, Zod validation, Pino logging, multi-stage Dockerfile, GitHub Actions CI. Deploys to Lambda or ECS Fargate."
+description: "Express + TypeScript. Strict tsconfig, real Zod-validated route, Pino logging, multi-stage Dockerfile, GitHub Actions CI. Deploys to Lambda (default) or ECS Fargate, both using Gabaltech's real terraform-modules (terraform-aws-serverless / terraform-aws-ecs)."
 tech_stack: typescript
 category: backend
 
 deploy:
   type: terraform
-  path: ./infrastructure
+  path: ./infrastructure/{compute}
   pipeline: github-actions
   entry: deploy.yml
   branch: main
@@ -32,6 +32,30 @@ parameters:
     type: select
     options: ["20", "22"]
     default: "22"
+  - name: region
+    label: AWS Region
+    type: string
+    default: eu-west-2
+  - name: cluster_arn
+    label: ECS Cluster ARN
+    type: string
+    hint: "ECS Fargate only — ARN of an existing cluster to deploy into."
+  - name: vpc_id
+    label: VPC ID
+    type: string
+    hint: "ECS Fargate only — VPC to deploy the service into."
+  - name: subnet_ids
+    label: Subnet IDs
+    type: string
+    hint: "ECS Fargate only — comma-separated subnet IDs."
+  - name: security_group_ids
+    label: Security Group IDs
+    type: string
+    hint: "ECS Fargate only — comma-separated security group IDs."
+  - name: ecr_repository_url
+    label: ECR Repository URL
+    type: string
+    hint: "ECS Fargate only — where the built container image is pushed."
 
 requires:
   - kind: secret

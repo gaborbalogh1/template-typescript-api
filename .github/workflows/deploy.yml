@@ -2,17 +2,113 @@ name: Deploy
 on:
   workflow_dispatch:
     inputs:
-      environment: { type: choice, options: [dev, test, prod], default: dev }
-      service_name: { type: string, required: true }
+      environment:
+        type: choice
+        options: [dev, test, prod]
+        default: dev
+      service_name:
+        type: string
+        required: true
+      compute:
+        type: choice
+        options: [lambda, ecs-fargate]
+        default: lambda
+      node_version:
+        type: choice
+        options: ["20", "22"]
+        default: "22"
+      region:
+        type: string
+        default: eu-west-2
+      # ECS Fargate only
+      cluster_arn:
+        type: string
+        default: ""
+      vpc_id:
+        type: string
+        default: ""
+      subnet_ids:
+        type: string
+        default: ""
+        description: "Comma-separated"
+      security_group_ids:
+        type: string
+        default: ""
+        description: "Comma-separated"
+      ecr_repository_url:
+        type: string
+        default: ""
+
 jobs:
-  deploy:
+  deploy-lambda:
+    if: ${{ inputs.compute == 'lambda' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: "${{ inputs.node_version }}" }
+      - run: npm ci
+      - run: npm run build
+      - run: npm prune --omit=dev
+
       - uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: eu-west-2
-      - name: Deploy
-        run: echo "IDP_SERVICE=${{ inputs.service_name }} IDP_ENV=${{ inputs.environment }}"
+          aws-region: ${{ inputs.region }}
+
+      - uses: hashicorp/setup-terraform@v3
+      - name: Terraform apply (creates/updates the function, not its code)
+        working-directory: infrastructure/lambda
+        run: |
+          terraform init
+          terraform apply -auto-approve \
+            -var="service_name=${{ inputs.service_name }}" \
+            -var="environment=${{ inputs.environment }}" \
+            -var="region=${{ inputs.region }}"
+
+      - name: Package and deploy the real compiled code
+        run: |
+          zip -r function.zip dist node_modules
+          aws lambda update-function-code \
+            --function-name "${{ inputs.environment }}-${{ inputs.service_name }}" \
+            --zip-file fileb://function.zip \
+            --region "${{ inputs.region }}"
+
+  deploy-ecs:
+    if: ${{ inputs.compute == 'ecs-fargate' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ inputs.region }}
+
+      - uses: aws-actions/amazon-ecr-login@v2
+        id: ecr
+
+      - name: Build and push image
+        run: |
+          docker build -t "${{ inputs.ecr_repository_url }}:${{ github.sha }}" -t "${{ inputs.ecr_repository_url }}:latest" .
+          docker push "${{ inputs.ecr_repository_url }}:${{ github.sha }}"
+          docker push "${{ inputs.ecr_repository_url }}:latest"
+
+      - uses: hashicorp/setup-terraform@v3
+      - name: Terraform apply
+        working-directory: infrastructure/ecs-fargate
+        env:
+          TF_VAR_service_name: ${{ inputs.service_name }}
+          TF_VAR_environment: ${{ inputs.environment }}
+          TF_VAR_region: ${{ inputs.region }}
+          TF_VAR_image_tag: ${{ github.sha }}
+          TF_VAR_ecr_repository_url: ${{ inputs.ecr_repository_url }}
+          TF_VAR_cluster_arn: ${{ inputs.cluster_arn }}
+          TF_VAR_vpc_id: ${{ inputs.vpc_id }}
+        run: |
+          echo "subnet_ids = $(echo "${{ inputs.subnet_ids }}" | jq -R 'split(",")')" >> generated.auto.tfvars
+          echo "security_group_ids = $(echo "${{ inputs.security_group_ids }}" | jq -R 'split(",")')" >> generated.auto.tfvars
+          terraform init
+          terraform apply -auto-approve
